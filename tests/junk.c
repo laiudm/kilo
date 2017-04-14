@@ -1,7 +1,7 @@
 "asdasd" sdsdfs "sdfsf\"sdff " sadfsd
 sadsad 'asdsad\'\zxc' asdasd
 if else int long double float void case sdfasdf //asdfasdfasdfasdf
-asdfasdf //asdfadfaf#
+asdfasdf //asdfadfaf #
 //asdfadf 
 /* adfa */ sdfasdfda
 adfknaf

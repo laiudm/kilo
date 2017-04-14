@@ -125,6 +125,33 @@ struct editorConfig {
 
 struct editorConfig E;
 
+/*** prototypes ***/
+
+void die(const char *s);
+void editorSetStatusMessage(const char *fmt, ...);
+void editorRefreshScreen();
+char *editorPrompt(char *prompt, void (*callback)(char *, int));
+void consoleBufferOpen();
+
+/*** utilities ***/
+
+// search backwards from start towards beg looking for an occurence of find
+// return NULL if not found
+// (start should always point inside the string starting at beg)
+char *revstrstr(char *beg, char *start, char *find) {
+	if (start < beg)
+		die("invalid pointers to revstrstr");
+	
+	size_t findlen = strlen(find);
+	for (char * p = start; p >= beg; p--) {
+		if (strncmp(p, find, findlen) == 0)
+			return p;
+	}
+	return NULL;
+}
+	
+	
+
 /*** filetypes ***/
 
 char *C_HL_extensions[] = { ".c", ".h", ".cpp", NULL };
@@ -149,13 +176,6 @@ struct editorSyntax HLDB[] = {	// HLDB = Highlight Database
 };
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
-
-/*** prototypes ***/
-
-void editorSetStatusMessage(const char *fmt, ...);
-void editorRefreshScreen();
-char *editorPrompt(char *prompt, void (*callback)(char *, int));
-void consoleBufferOpen();
 
 /*** terminal ***/
 
@@ -750,25 +770,22 @@ void editorFindCallback(char *query, int key) {
 		direction = 1;
 	}
 	
-	// start the search from the current cursor position
-	// current impl. only finds the first match per line. Ignores any subs. matches on same line
+	// start the search from the current cursor position, or the last search
 	int current_posn_y, current_posn_x;
 	if (last_match_y <= -1) {
-		// invalid - so start at current cursor position
 		current_posn_y = E.cy;
 		current_posn_x = E.cx;
 	} else {
 		current_posn_y = last_match_y;
 		current_posn_x = last_match_x + 1;	// start searching 1 past the last to move to the next
 	}
-	//int current_posn_y = last_match_y <= -1 ? E.cy - 1 : last_match_y;
 	
 	for (int i = 0; i < E.numrows; i++) {
 		if (current_posn_y <= -1) current_posn_y = E.numrows - 1;	// wrap from bot to top
 		if (current_posn_y >= E.numrows) current_posn_y = 0;	// wrap from top to bot
 		
 		erow *row = &E.row[current_posn_y];
-		char *match = strstr(&row->render[current_posn_x], query);
+		char *match = strstr(&row->render[current_posn_x], query); // not quite correct for reverse search
 		if (match) {
 			last_match_y = current_posn_y;
 			E.cy = current_posn_y;
