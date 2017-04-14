@@ -135,6 +135,7 @@ void editorSetStatusMessage(const char *fmt, ...);
 void editorRefreshScreen();
 char *editorPrompt(char *prompt, void (*callback)(char *, int));
 void consoleBufferOpen();
+void editorMoveCursor(int key);
 
 /*** utilities ***/
 
@@ -747,56 +748,43 @@ void editorSave() {
 /*** find ***/
 
 void editorFindCallback(char *query, int key) {
-	static coord last_match = { -1, 0 }; // posn of last match. x =-1 if no match
 	static char *saved_hl = NULL;	// use to restore line to state prior to highlighting
+	static int savedrow;
 	
 	// remove any previous search highlighting (if any)
 	if (saved_hl) {
-		memcpy(E.row[last_match.y].hl, saved_hl, E.row[last_match.y].rsize);
+		memcpy(E.row[savedrow].hl, saved_hl, E.row[savedrow].rsize);
 		free(saved_hl);
 		saved_hl = NULL;
 	}
 
-	if (key== '\r' || key == '\x1b') {		// finish search; restore flag
-		last_match.x = -1;
+	if (key== '\r' || key == '\x1b') {		// finish search
 		return;
 	}
 	
 	int direction;			// which direction to search
 	if (key == ARROW_RIGHT || key == ARROW_DOWN) {
 		direction = 1;
+		editorMoveCursor(ARROW_RIGHT);	// want to search 1 beyond current match
 	} else if (key == ARROW_LEFT || key == ARROW_UP) {
 		direction = -1;
+		editorMoveCursor(ARROW_LEFT);
 	} else {
-		last_match.x = -1;	// anything else means it's a new search
 		direction = 1;
 	}
 	
-	// start the search from the current cursor position, or one past the last search
-	if (last_match.x <= -1) {
-		last_match.y = E.c.y;
-		last_match.x = E.c.x;
-	} else {
-		last_match.x += direction;	// Must wrap to previous line if < 0. Should add a util to do wrapping
-		if (last_match.x < 0) { // can only occur if going backwards
-			last_match.y--;			//wot if going past the top of the screen?? 
-			last_match.x = E.row[last_match.y].size;
-		}
-	}
-	
 	for (int i = 0; i < E.numrows; i++) {
+		erow *row = &E.row[E.c.y];
+		int x = editorRowCxToRx(row, E.c.x);
+		char *match = (direction  > 0)
+			? strstr   (&row->render[x], query)
+			: revstrstr(&row->render[0], &row->render[x], query);
 		
-		erow *row = &E.row[last_match.y];
-		char *match;
-		if (direction  > 0) {
-			match = strstr(&row->render[last_match.x], query);
-		} else {
-			match = revstrstr(&row->render[0], &row->render[last_match.x], query);
-		}
+		//debug("i = %i, match; x= %i, offset= %i, revised = %i, string='%s'", i, x, match - row->render, E.c.x, row->render);
+
 		if (match) {
 			// yay found a match - reposition the cursor
-			last_match.x = editorRowRxToCx(row, match - row->render);
-			E.c = last_match;
+			E.c.x = editorRowRxToCx(row, match - row->render);
 			
 			// reposition the viewport, if needed
 			int new_offset = (E.c.y - E.offset.y) + 1;
@@ -806,19 +794,20 @@ void editorFindCallback(char *query, int key) {
 			}
 			
 			// highlight the match, having first saved the old highlighting
+			savedrow = E.c.y;
 			saved_hl = malloc(row->rsize);
 			memcpy(saved_hl, row->hl, row->rsize);
 			memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
-			break;
+			return;
 		}
-
-		last_match.y += direction;
-		if (last_match.y <= -1) last_match.y = E.numrows - 1;	// wrap from bot to top
-		if (last_match.y >= E.numrows) last_match.y = 0;	// wrap from top to bot	
+		
+		// move the cursor to the next line
 		if (direction > 0) {
-			last_match.x = 0; 	// start at the beginning of the next line, or end if going up (TODO)
+			editorMoveCursor(ARROW_DOWN);
+			E.c.x = 0; // beginning of the line
 		} else {
-			last_match.x = E.row[last_match.y].size;
+			editorMoveCursor(ARROW_UP);
+			E.c.x = E.row[E.c.y].size;	// end of the line
 		}
 	}
 }	
@@ -1203,8 +1192,8 @@ int main(int argc, char *argv[]) {
 	if (argc >= 2) {
 		editorOpen(argv[1]);
 	}
-	debug("Processed args");
-	debug("this works too %i - amazing! and a string too %s", 10, argv[0]);
+	//debug("Processed args");
+	//debug("this works too %i - amazing! and a string too %s", 10, argv[0]);
 	editorSetStatusMessage("HELP: Ctrl-S = save | Ctrl-Q = quit | Ctrl-F = find");
 	
 	while(1) {

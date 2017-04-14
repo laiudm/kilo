@@ -1,4 +1,7 @@
-"asdasd" sdsdfs "sdfsf\"sdff " sadfsd
+asd
+as		as	"asdasd" sdsdfs "sdfsf\"sdff " sadfsddd
+sasdfsddd
+sasdfsd
 sadsad 'asdsad\'\zxc' asdasd
 if else int long double float void case sdfasdf //asdfasdfasdfasdf
 asdfasdf //asdfadfaf #
