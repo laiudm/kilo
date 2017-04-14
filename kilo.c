@@ -106,14 +106,17 @@ typedef struct erow {
 	int hl_open_comment;
 } erow;
 
+typedef struct coord {
+	int x;
+	int y;
+} coord;
+
 struct editorConfig {
-	int cx, cy;
+	coord c;
 	int rx;		// correctly position the cursor when tabs are present
-	int rowoff;
-	int coloff;
-	int screenrows;
-	int screencols;
-	int numrows;
+	coord offset;
+	coord screen;
+	int numrows;	// number of rows of actual text being edited
 	erow *row;
 	int dirty;
 	char *filename;
@@ -299,15 +302,15 @@ int getWindowSize(int *rows, int *cols) {
 }
 
 void editorUpdateWindowSize() {
-	if (getWindowSize(&E.screenrows, &E.screencols) == -1) 
+	if (getWindowSize(&E.screen.y, &E.screen.x) == -1) 
 		die("getWindowSize");
-	E.screenrows -= 2; // one line is for status, another for messages
+	E.screen.y -= 2; // one line is for status, another for messages
 }
 
 void editorHandleSigwinch() {
 	editorUpdateWindowSize();
-	if (E.cy >= E.screenrows) E.cy = E.screenrows - 1;
-	if (E.cx >= E.screencols) E.cx = E.screencols - 1;
+	if (E.c.x >= E.screen.x) E.c.x = E.screen.x - 1;
+	if (E.c.y >= E.screen.y) E.c.y = E.screen.y - 1;
 	editorRefreshScreen();
 }
 
@@ -508,10 +511,10 @@ void editorSelectSyntaxHighlight() {
 
 /*** row operations ***/
 
-int editorRowCxToRx(erow *row, int cx) {
+int editorRowCxToRx(erow *row, int x) {
 	int rx = 0;
 	int j;
-	for (j = 0; j < cx; j++) {
+	for (j = 0; j < x; j++) {
 		if (row->chars[j] == '\t')
 			rx += (KILO_TAB_STOP - 1) - (rx % KILO_TAB_STOP);
 		rx++;
@@ -521,15 +524,15 @@ int editorRowCxToRx(erow *row, int cx) {
 
 int editorRowRxToCx(erow *row, int rx) {
 	int cur_rx = 0;
-	int cx;
-	for (cx = 0; cx < row->size; cx++) {
-		if (row->chars[cx] == '\t')
+	int x;
+	for (x = 0; x < row->size; x++) {
+		if (row->chars[x] == '\t')
 			cur_rx += (KILO_TAB_STOP - 1) - (cur_rx % KILO_TAB_STOP);
 		cur_rx++;
 		
-		if (cur_rx > rx) return cx;
+		if (cur_rx > rx) return x;
 	}
-	return cx;
+	return x;
 }
 
 void editorUpdateRow(erow *row) {
@@ -591,7 +594,9 @@ void editorDelRow(int at) {
 	if (at < 0 || at >= E.numrows) return;
 	editorFreeRow(&E.row[at]);
 	memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
-	for (int j = at; j < E.numrows - 1; j++) E.row[j].idx--; //fix index no's
+	for (int j = at; j < E.numrows - 1; j++)
+		E.row[j].idx--; //fix index no's
+	
 	E.numrows--;
 	E.dirty++;
 }
@@ -626,41 +631,41 @@ void editorRowDelChar(erow *row, int at) {
 /*** editor operations ***/
 
 void editorInsertChar(int c) {
-	if (E.cy == E.numrows) {
+	if (E.c.y == E.numrows) {
 		editorInsertRow(E.numrows, "", 0);
 	}
-	editorRowInsertChar(&E.row[E.cy], E.cx, c);
-	E.cx++;
+	editorRowInsertChar(&E.row[E.c.y], E.c.x, c);
+	E.c.x++;
 }
 
 void editorInsertNewLine() {
-	if (E.cx == 0) {
-		editorInsertRow(E.cy, "", 0);
+	if (E.c.x == 0) {
+		editorInsertRow(E.c.y, "", 0);
 	} else {
-		erow *row = &E.row[E.cy];
-		editorInsertRow(E.cy + 1, &row->chars[E.cx], row->size - E.cx);
-		row = &E.row[E.cy];
-		row->size = E.cx;
+		erow *row = &E.row[E.c.y];
+		editorInsertRow(E.c.y + 1, &row->chars[E.c.x], row->size - E.c.x);
+		row = &E.row[E.c.y];
+		row->size = E.c.x;
 		row->chars[row->size] = '\0';
 		editorUpdateRow(row);
 	}
-	E.cy++;
-	E.cx = 0;
+	E.c.y++;
+	E.c.x = 0;
 }
 
 void editorDelChar() {
-	if (E.cy == E.numrows) return;
-	if (E.cx == 0 && E.cy == 0) return;
+	if (E.c.y == E.numrows) return;
+	if (E.c.x == 0 && E.c.y == 0) return;
 	
-	erow *row = &E.row[E.cy];
-	if (E.cx > 0) {
-		editorRowDelChar(row, E.cx - 1);
-		E.cx--;
+	erow *row = &E.row[E.c.y];
+	if (E.c.x > 0) {
+		editorRowDelChar(row, E.c.x - 1);
+		E.c.x--;
 	} else {
-		E.cx = E.row[E.cy - 1].size;
-		editorRowAppendString(&E.row[E.cy - 1], row->chars, row->size);
-		editorDelRow(E.cy);
-		E.cy--;
+		E.c.x = E.row[E.c.y - 1].size;
+		editorRowAppendString(&E.row[E.c.y - 1], row->chars, row->size);
+		editorDelRow(E.c.y);
+		E.c.y--;
 	}
 }
 
@@ -742,21 +747,18 @@ void editorSave() {
 /*** find ***/
 
 void editorFindCallback(char *query, int key) {
-	static int last_match_y = -1;	// remember position of last match from call to call. -1 if no match
-	static int last_match_x = 0;	// only valid if last_match_y is valid
-	
-	static int saved_hl_line;
-	static char *saved_hl = NULL;
+	static coord last_match = { -1, 0 }; // posn of last match. x =-1 if no match
+	static char *saved_hl = NULL;	// use to restore line to state prior to highlighting
 	
 	// remove any previous search highlighting (if any)
 	if (saved_hl) {
-		memcpy(E.row[saved_hl_line].hl, saved_hl, E.row[saved_hl_line].rsize);
+		memcpy(E.row[last_match.y].hl, saved_hl, E.row[last_match.y].rsize);
 		free(saved_hl);
 		saved_hl = NULL;
 	}
 
 	if (key== '\r' || key == '\x1b') {		// finish search; restore flag
-		last_match_y = -1;
+		last_match.x = -1;
 		return;
 	}
 	
@@ -766,64 +768,71 @@ void editorFindCallback(char *query, int key) {
 	} else if (key == ARROW_LEFT || key == ARROW_UP) {
 		direction = -1;
 	} else {
-		last_match_y = -1;
+		last_match.x = -1;	// anything else means it's a new search
 		direction = 1;
 	}
 	
-	// start the search from the current cursor position, or the last search
-	int current_posn_y, current_posn_x;
-	if (last_match_y <= -1) {
-		current_posn_y = E.cy;
-		current_posn_x = E.cx;
+	// start the search from the current cursor position, or one past the last search
+	if (last_match.x <= -1) {
+		last_match.y = E.c.y;
+		last_match.x = E.c.x;
 	} else {
-		current_posn_y = last_match_y;
-		current_posn_x = last_match_x + 1;	// start searching 1 past the last to move to the next
+		last_match.x += direction;	// Must wrap to previous line if < 0. Should add a util to do wrapping
+		if (last_match.x < 0) { // can only occur if going backwards
+			last_match.y--;			//wot if going past the top of the screen?? 
+			last_match.x = E.row[last_match.y].size;
+		}
 	}
 	
 	for (int i = 0; i < E.numrows; i++) {
-		if (current_posn_y <= -1) current_posn_y = E.numrows - 1;	// wrap from bot to top
-		if (current_posn_y >= E.numrows) current_posn_y = 0;	// wrap from top to bot
 		
-		erow *row = &E.row[current_posn_y];
-		char *match = strstr(&row->render[current_posn_x], query); // not quite correct for reverse search
+		erow *row = &E.row[last_match.y];
+		char *match;
+		if (direction  > 0) {
+			match = strstr(&row->render[last_match.x], query);
+		} else {
+			match = revstrstr(&row->render[0], &row->render[last_match.x], query);
+		}
 		if (match) {
-			last_match_y = current_posn_y;
-			E.cy = current_posn_y;
-			last_match_x = editorRowRxToCx(row, match - row->render);
-			E.cx = last_match_x;
-			//E.cx = editorRowRxToCx(row, match - row->render);
-			int new_offset = (E.cy - E.rowoff) + 1;
-			if ( (new_offset > E.screenrows) || (new_offset < 0) ) {
-				// only move the view offset if need to bring the line into view.
-				E.rowoff = E.cy - E.numrows/2; // reposition to middle of screen
-				if (E.rowoff < 0) E.rowoff = 0;
+			// yay found a match - reposition the cursor
+			last_match.x = editorRowRxToCx(row, match - row->render);
+			E.c = last_match;
+			
+			// reposition the viewport, if needed
+			int new_offset = (E.c.y - E.offset.y) + 1;
+			if ( (new_offset > E.screen.y) || (new_offset < 0) ) {
+				E.offset.y = E.c.y - E.numrows/2; // reposition to middle of screen
+				if (E.offset.y < 0) E.offset.y = 0;
 			}
 			
 			// highlight the match, having first saved the old highlighting
-			saved_hl_line = current_posn_y;
 			saved_hl = malloc(row->rsize);
 			memcpy(saved_hl, row->hl, row->rsize);
 			memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
 			break;
 		}
-		current_posn_y += direction;
+
+		last_match.y += direction;
+		if (last_match.y <= -1) last_match.y = E.numrows - 1;	// wrap from bot to top
+		if (last_match.y >= E.numrows) last_match.y = 0;	// wrap from top to bot	
+		if (direction > 0) {
+			last_match.x = 0; 	// start at the beginning of the next line, or end if going up (TODO)
+		} else {
+			last_match.x = E.row[last_match.y].size;
+		}
 	}
 }	
 
 void editorFind() {
-	int saved_cx = E.cx;
-	int saved_cy = E.cy;
-	int saved_coloff = E.coloff;
-	int saved_rowoff = E.rowoff;
+	coord saved_c = E.c;
+	coord saved_offset = E.offset;
 	char *query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback);
 	
 	if (query) {
 		free(query);
 	} else {
-		E.cx = saved_cx;
-		E.cy = saved_cy;
-		E.coloff = saved_coloff;
-		E.rowoff = saved_rowoff;
+		E.c = saved_c;
+		E.offset = saved_offset;
 	}
 }
 
@@ -853,36 +862,36 @@ void abFree(struct abuf *ab) {
 
 void editorScroll() {
 	E.rx = 0;
-	if (E.cy < E.numrows) {
-		E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
+	if (E.c.y < E.numrows) {
+		E.rx = editorRowCxToRx(&E.row[E.c.y], E.c.x);
 	}
 	
-	if (E.cy < E.rowoff) {
-		E.rowoff = E.cy;
+	if (E.c.y < E.offset.y) {
+		E.offset.y = E.c.y;
 	}
-	if (E.cy >= E.rowoff + E.screenrows) {
-		E.rowoff = E.cy - E.screenrows + 1;
+	if (E.c.y >= E.offset.y + E.screen.y) {
+		E.offset.y = E.c.y - E.screen.y + 1;
 	}
-	if (E.rx < E.coloff) {
-		E.coloff = E.rx;
+	if (E.rx < E.offset.x) {
+		E.offset.x = E.rx;
 	}
-	if (E.rx >= E.coloff + E.screencols) {
-		E.coloff = E.rx - E.screencols + 1;
+	if (E.rx >= E.offset.x + E.screen.x) {
+		E.offset.x = E.rx - E.screen.x + 1;
 	}
 }
 
 void editorDrawRows(struct abuf *ab) {
 	int y;
-	for (y=0; y < E.screenrows; y++) {
-		int filerow = y + E.rowoff;
+	for (y=0; y < E.screen.y; y++) {
+		int filerow = y + E.offset.y;
 		
 		if (filerow >= E.numrows) {
-			if (E.numrows == 0 && y == E.screenrows / 3) {
+			if (E.numrows == 0 && y == E.screen.y / 3) {
 				char welcome[80];
 				int welcomelen = snprintf(welcome, sizeof(welcome),
 				  "Kilo editor -- version %s", KILO_VERSION);
-				if (welcomelen > E.screencols) welcomelen = E.screencols;
-				int padding = (E.screencols - welcomelen) / 2;
+				if (welcomelen > E.screen.x) welcomelen = E.screen.x;
+				int padding = (E.screen.x - welcomelen) / 2;
 				if (padding) {
 					abAppend(ab, "~", 1);
 					padding--;
@@ -893,11 +902,11 @@ void editorDrawRows(struct abuf *ab) {
 				abAppend( ab, "~", 1);
 			}
 		} else {
-			int len = E.row[filerow].rsize - E.coloff;
+			int len = E.row[filerow].rsize - E.offset.x;
 			if (len < 0) len = 0;
-			if (len > E.screencols) len = E.screencols;
-			char *c = &E.row[filerow].render[E.coloff];
-			unsigned char *hl = &E.row[filerow].hl[E.coloff];
+			if (len > E.screen.x) len = E.screen.x;
+			char *c = &E.row[filerow].render[E.offset.x];
+			unsigned char *hl = &E.row[filerow].hl[E.offset.x];
 			int current_color = -1;
 			int j;
 			for (j = 0; j < len; j++) {
@@ -945,11 +954,11 @@ void editorDrawStatusBar(struct abuf *ab) {
 		E.filename ? E.filename : "[No Name]", E.numrows,
 		E.dirty ? "(modified)" : "");
 	int rlen = snprintf(rstatus, sizeof(rstatus), "%s | %d/%d",
-		E.syntax ? E.syntax->filetype : "no ft", E.cy + 1, E.numrows);
-	if (len > E.screencols) len = E.screencols;
+		E.syntax ? E.syntax->filetype : "no ft", E.c.y + 1, E.numrows);
+	if (len > E.screen.x) len = E.screen.x;
 	abAppend(ab, status, len);
-	while (len < E.screencols) {
-		if (E.screencols - len == rlen) {
+	while (len < E.screen.x) {
+		if (E.screen.x - len == rlen) {
 			abAppend(ab, rstatus, rlen);
 			break;
 		} else {
@@ -964,7 +973,7 @@ void editorDrawStatusBar(struct abuf *ab) {
 void editorDrawMessageBar(struct abuf *ab) {
 	abAppend(ab, "\x1b[K", 3);
 	int msglen = strlen(E.statusmsg);
-	if (msglen > E.screencols) msglen = E.screencols;
+	if (msglen > E.screen.x) msglen = E.screen.x;
 	if (msglen && time(NULL) - E.statusmsg_time < 5)
 		abAppend(ab, E.statusmsg, msglen);
 }
@@ -983,8 +992,8 @@ void editorRefreshScreen() {
 	
 	// put cursor at its current position
 	char buf[32];
-	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, 
-												(E.rx - E.coloff) + 1);
+	snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.c.y - E.offset.y) + 1, 
+												(E.rx - E.offset.x) + 1);
 	abAppend(&ab, buf, strlen(buf));
 	abAppend( &ab, "\x1b[?25h", 6);	// show cursor
 	write(STDOUT_FILENO, ab.b, ab.len);
@@ -1040,41 +1049,41 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
 }
 
 void editorMoveCursor(int key) {
-	erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+	erow *row = (E.c.y >= E.numrows) ? NULL : &E.row[E.c.y];
 	
 	switch (key) {
 		case ARROW_LEFT:
-			if (E.cx != 0) {
-				E.cx--;
-			} else if (E.cy > 0) {
-				E.cy--;
-				E.cx = E.row[E.cy].size;
+			if (E.c.x != 0) {
+				E.c.x--;
+			} else if (E.c.y > 0) {
+				E.c.y--;
+				E.c.x = E.row[E.c.y].size;
 			}
 			break;
 		case ARROW_RIGHT:
-			if (row && E.cx < row->size) {
-				E.cx++;
-			} else if (row && E.cx == row->size) {
-				E.cy++;
-				E.cx = 0;
+			if (row && E.c.x < row->size) {
+				E.c.x++;
+			} else if (row && E.c.x == row->size) {
+				E.c.y++;
+				E.c.x = 0;
 			}
 			break;
 		case ARROW_UP:
-			if (E.cy != 0) {
-				E.cy--;
+			if (E.c.y != 0) {
+				E.c.y--;
 			}
 			break;
 		case ARROW_DOWN:
-			if (E.cy < E.numrows) {
-				E.cy++;
+			if (E.c.y < E.numrows) {
+				E.c.y++;
 			}
 			break;
 	}
 	
-	row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+	row = (E.c.y >= E.numrows) ? NULL : &E.row[E.c.y];
 	int rowlen = row ? row->size : 0;
-	if (E.cx > rowlen) {
-		E.cx = rowlen;
+	if (E.c.x > rowlen) {
+		E.c.x = rowlen;
 	}
 }
 
@@ -1106,12 +1115,12 @@ void editorProcessKeypress() {
 			break;
 			
 		case HOME_KEY:
-			E.cx = 0;
+			E.c.x = 0;
 			break;
 			
 		case END_KEY:
-			if (E.cy < E.numrows)
-				E.cx = E.row[E.cy].size;
+			if (E.c.y < E.numrows)
+				E.c.x = E.row[E.c.y].size;
 			break;
 		
 		case CTRL_KEY('f'):
@@ -1129,12 +1138,12 @@ void editorProcessKeypress() {
 		case PAGE_DOWN:
 			{
 				if (c == PAGE_UP) {
-					E.cy = E.rowoff;
+					E.c.y = E.offset.y;
 				} else if (c == PAGE_DOWN) {
-					E.cy = E.rowoff + E.screenrows - 1;
+					E.c.y = E.offset.y + E.screen.y - 1;
 				}
 				
-				int times = E.screenrows;
+				int times = E.screen.y;
 				while(times--)
 					editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
 			}
@@ -1168,11 +1177,11 @@ void editorProcessKeypress() {
 /*** init ***/
 
 void initEditor() {
-	E.cx = 0;
-	E.cy = 0;
+	E.c.x = 0;
+	E.c.y = 0;
 	E.rx = 0;
-	E.rowoff = 0;
-	E.coloff = 0;
+	E.offset.x = 0;
+	E.offset.y = 0;
 	E.numrows = 0;
 	E.row = NULL;
 	E.dirty = 0;
